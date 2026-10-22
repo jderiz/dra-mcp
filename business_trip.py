@@ -4,9 +4,9 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from datetime import date, datetime
 from pathlib import Path
-from typing import Sequence
 
 from dotenv import load_dotenv
 from pypdf import PdfReader
@@ -20,7 +20,6 @@ from trip_folder import (
     create_trip_folder,
     trip_form,
 )
-
 
 BASE_DIR = Path(__file__).resolve().parent
 # Bundled fallback, used when DRA_TEMPLATE_DIR is not set.
@@ -107,10 +106,18 @@ CHECKBOX_FIELDS = {
 }
 
 RADIO_OPTIONS = {
-    "application_kind": ("Beantragung", {"business-trip": 1, "training-trip": 2, "it-trip": 3}),
+    "application_kind": (
+        "Beantragung",
+        {"business-trip": 1, "training-trip": 2, "it-trip": 3},
+    ),
     "employment_status": (
         "beruf",
-        {"civil-servant-or-judge": 1, "employee": 2, "temporary-civil-servant": 3, "trainee": 4},
+        {
+            "civil-servant-or-judge": 1,
+            "employee": 2,
+            "temporary-civil-servant": 3,
+            "trainee": 4,
+        },
     ),
     "additional_participants": ("wt", {"yes": 1, "no": 2}),
     "meal_provider": ("wegen", {"official": 1, "personal": 2}),
@@ -174,17 +181,37 @@ def parse_datetime(date_value: str, time_value: str, label: str) -> datetime:
 def check_trip_order(values: dict) -> None:
     """Departure must precede the business start, return must follow the business end."""
     trip_times = (
-        ("departure_date", "departure_time", "business_start_date", "business_start_time"),
+        (
+            "departure_date",
+            "departure_time",
+            "business_start_date",
+            "business_start_time",
+        ),
         ("business_end_date", "business_end_time", "return_date", "return_time"),
     )
     for earlier_date, earlier_time, later_date, later_time in trip_times:
-        if all(values.get(name) is not None for name in (earlier_date, earlier_time, later_date, later_time)):
-            earlier = parse_datetime(values[earlier_date], values[earlier_time], earlier_date.replace("_", " ").capitalize())
-            later = parse_datetime(values[later_date], values[later_time], later_date.replace("_", " ").capitalize())
+        if all(
+            values.get(name) is not None
+            for name in (earlier_date, earlier_time, later_date, later_time)
+        ):
+            earlier = parse_datetime(
+                values[earlier_date],
+                values[earlier_time],
+                earlier_date.replace("_", " ").capitalize(),
+            )
+            later = parse_datetime(
+                values[later_date],
+                values[later_time],
+                later_date.replace("_", " ").capitalize(),
+            )
             if earlier >= later:
                 if earlier_date == "departure_date":
-                    raise ValueError("Departure date/time must be before business start date/time.")
-                raise ValueError("Return date/time must be after business end date/time.")
+                    raise ValueError(
+                        "Departure date/time must be before business start date/time."
+                    )
+                raise ValueError(
+                    "Return date/time must be after business end date/time."
+                )
 
 
 def open_file(path: Path) -> None:
@@ -277,7 +304,9 @@ def create_business_trip_application(
     """
     arguments = locals().copy()
     trip_date = departure_date or business_start_date
-    folder = create_trip_folder(parse_date(trip_date) if trip_date else None, destination)
+    folder = create_trip_folder(
+        parse_date(trip_date) if trip_date else None, destination
+    )
     try:
         result = create_business_trip_application_int(
             output_path=folder / f"{APPLICATION_PREFIX}{folder.name}.pdf",
@@ -289,81 +318,84 @@ def create_business_trip_application(
         raise
     return {"trip_folder": str(folder), "application_pdf": str(result)}
 
-def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, template_path: str | Path = TEMPLATE_PDF,
-                                         sign: bool | None = None,
-                                         service_unit: str | None = None,
-                                             applicant_name: str | None = None,
-                                             department: str | None = None,
-                                             office_phone: str | None = None,
-                                             home_address: str | None = None,
-                                             additional_home_address: str | None = None,
-                                             temporary_stay_address: str | None = None,
-                                             destination: str | None = None,
-                                             purpose: str | None = None,
-                                             overnight_cost_per_night: str | None = None,
-                                             departure_date: str | None = None,
-                                             departure_time: str | None = None,
-                                             business_start_date: str | None = None,
-                                             business_start_time: str | None = None,
-                                             business_end_date: str | None = None,
-                                             business_end_time: str | None = None,
-                                             return_date: str | None = None,
-                                             return_time: str | None = None,
-                                             outbound_other_transport: str | None = None,
-                                             return_other_transport: str | None = None,
-                                             bahncard_number: str | None = None,
-                                             bahncard_valid_until: str | None = None,
-                                             travel_card_from: str | None = None,
-                                             travel_card_to: str | None = None,
-                                             bonus_program_name: str | None = None,
-                                             private_car_reason: str | None = None,
-                                             private_car_reason_continuation: str | None = None,
-                                             flight_reason: str | None = None,
-                                             flight_reason_continuation: str | None = None,
-                                             private_stay_from: str | None = None,
-                                             private_stay_until: str | None = None,
-                                             private_stay_destination: str | None = None,
-                                             iban: str | None = None,
-                                             bic: str | None = None,
-                                             bank_name: str | None = None,
-                                             explanations: str | None = None,
-                                             explanations_continuation: str | None = None,
-                                             application_date: str | None = None,
-                                             meals_provided_free: bool | None = None,
-                                             outbound_train: bool | None = None,
-                                             outbound_bus_or_public_transport: bool | None = None,
-                                             outbound_private_car: bool | None = None,
-                                             outbound_passenger_in_private_car: bool | None = None,
-                                             outbound_official_car: bool | None = None,
-                                             outbound_flight: bool | None = None,
-                                             outbound_other_transport_selected: bool | None = None,
-                                             return_train: bool | None = None,
-                                             return_bus_or_public_transport: bool | None = None,
-                                             return_private_car: bool | None = None,
-                                             return_passenger_in_private_car: bool | None = None,
-                                             return_official_car: bool | None = None,
-                                             return_flight: bool | None = None,
-                                             return_other_transport_selected: bool | None = None,
-                                             uses_personal_travel_card: bool | None = None,
-                                             participates_in_bonus_program: bool | None = None,
-                                             requests_recognition_for_private_car: bool | None = None,
-                                             has_field_service_role: bool | None = None,
-                                             requests_flight_cost_reimbursement: bool | None = None,
-                                             uses_official_air_miles: bool | None = None,
-                                             requests_advance: bool | None = None,
-                                             application_kind: str | None = None,
-                                             employment_status: str | None = None,
-                                             additional_participants: str | None = None,
-                                             meal_provider: str | None = None,
-                                             overnight_required: str | None = None,
-                                             overnight_payment: str | None = None,
-                                             overnight_provider: str | None = None,
-                                             breakfast: str | None = None,
-                                             travel_start_from: str | None = None,
-                                             travel_end_at: str | None = None,
-                                             bahncard_class: str | None = None,
-                                             bahncard_rate: str | None = None
-                                         ):
+
+def create_business_trip_application_int(
+    output_path: str = DEFAULT_OUTPUT,
+    template_path: str | Path = TEMPLATE_PDF,
+    sign: bool | None = None,
+    service_unit: str | None = None,
+    applicant_name: str | None = None,
+    department: str | None = None,
+    office_phone: str | None = None,
+    home_address: str | None = None,
+    additional_home_address: str | None = None,
+    temporary_stay_address: str | None = None,
+    destination: str | None = None,
+    purpose: str | None = None,
+    overnight_cost_per_night: str | None = None,
+    departure_date: str | None = None,
+    departure_time: str | None = None,
+    business_start_date: str | None = None,
+    business_start_time: str | None = None,
+    business_end_date: str | None = None,
+    business_end_time: str | None = None,
+    return_date: str | None = None,
+    return_time: str | None = None,
+    outbound_other_transport: str | None = None,
+    return_other_transport: str | None = None,
+    bahncard_number: str | None = None,
+    bahncard_valid_until: str | None = None,
+    travel_card_from: str | None = None,
+    travel_card_to: str | None = None,
+    bonus_program_name: str | None = None,
+    private_car_reason: str | None = None,
+    private_car_reason_continuation: str | None = None,
+    flight_reason: str | None = None,
+    flight_reason_continuation: str | None = None,
+    private_stay_from: str | None = None,
+    private_stay_until: str | None = None,
+    private_stay_destination: str | None = None,
+    iban: str | None = None,
+    bic: str | None = None,
+    bank_name: str | None = None,
+    explanations: str | None = None,
+    explanations_continuation: str | None = None,
+    application_date: str | None = None,
+    meals_provided_free: bool | None = None,
+    outbound_train: bool | None = None,
+    outbound_bus_or_public_transport: bool | None = None,
+    outbound_private_car: bool | None = None,
+    outbound_passenger_in_private_car: bool | None = None,
+    outbound_official_car: bool | None = None,
+    outbound_flight: bool | None = None,
+    outbound_other_transport_selected: bool | None = None,
+    return_train: bool | None = None,
+    return_bus_or_public_transport: bool | None = None,
+    return_private_car: bool | None = None,
+    return_passenger_in_private_car: bool | None = None,
+    return_official_car: bool | None = None,
+    return_flight: bool | None = None,
+    return_other_transport_selected: bool | None = None,
+    uses_personal_travel_card: bool | None = None,
+    participates_in_bonus_program: bool | None = None,
+    requests_recognition_for_private_car: bool | None = None,
+    has_field_service_role: bool | None = None,
+    requests_flight_cost_reimbursement: bool | None = None,
+    uses_official_air_miles: bool | None = None,
+    requests_advance: bool | None = None,
+    application_kind: str | None = None,
+    employment_status: str | None = None,
+    additional_participants: str | None = None,
+    meal_provider: str | None = None,
+    overnight_required: str | None = None,
+    overnight_payment: str | None = None,
+    overnight_provider: str | None = None,
+    breakfast: str | None = None,
+    travel_start_from: str | None = None,
+    travel_end_at: str | None = None,
+    bahncard_class: str | None = None,
+    bahncard_rate: str | None = None,
+):
     load_dotenv(ENV_FILE)
 
     values = locals().copy()
@@ -390,13 +422,19 @@ def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, templ
     for argument, pdf_field in TEXT_FIELDS.items():
         value = values[argument]
         if value is not None:
-            form_values[pdf_field] = format_date(value) if argument in DATE_FIELDS else value
+            form_values[pdf_field] = (
+                format_date(value) if argument in DATE_FIELDS else value
+            )
 
     for argument, pdf_field in CHECKBOX_FIELDS.items():
         selected = values[argument]
         if selected is None:
             continue
-        states = [state for state in field_definitions[pdf_field]["/_States_"] if state != "/Off"]
+        states = [
+            state
+            for state in field_definitions[pdf_field]["/_States_"]
+            if state != "/Off"
+        ]
         if len(states) != 1:
             raise ValueError(f"Expected a single checkbox state for {pdf_field}.")
         form_values[pdf_field] = NameObject(states[0] if selected else "/Off")
@@ -405,16 +443,29 @@ def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, templ
         selected = values[argument]
         if selected is None:
             continue
-        states = [state for state in field_definitions[pdf_field]["/_States_"] if state != "/Off"]
+        states = [
+            state
+            for state in field_definitions[pdf_field]["/_States_"]
+            if state != "/Off"
+        ]
         form_values[pdf_field] = NameObject(states[choices[selected] - 1])
 
-    signature = (SIGNATURE_FIELD, signature_image) if signature_image is not None else None
+    signature = (
+        (SIGNATURE_FIELD, signature_image) if signature_image is not None else None
+    )
     return fill_pdf_form(source, output_path, form_values, signature)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Fill the applicant section of the business-trip PDF.")
-    parser.add_argument("--template", type=Path, default=TEMPLATE_PDF, help="Path to the blank PDF form.")
+    parser = argparse.ArgumentParser(
+        description="Fill the applicant section of the business-trip PDF."
+    )
+    parser.add_argument(
+        "--template",
+        type=Path,
+        default=TEMPLATE_PDF,
+        help="Path to the blank PDF form.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -422,14 +473,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path for the filled PDF. Default: a new trip folder below DRA_TRIPS_DIR (then --template is ignored).",
     )
 
-    for name, parameter in inspect.signature(create_business_trip_application).parameters.items():
+    for name, parameter in inspect.signature(
+        create_business_trip_application
+    ).parameters.items():
         if name in {"output_path", "template_path"}:
             continue
         option = "--" + name.replace("_", "-")
         if name in CHECKBOX_FIELDS or name == "sign":
-            parser.add_argument(option, action=argparse.BooleanOptionalAction, default=None)
+            parser.add_argument(
+                option, action=argparse.BooleanOptionalAction, default=None
+            )
         elif name in RADIO_OPTIONS:
-            parser.add_argument(option, choices=tuple(RADIO_OPTIONS[name][1]), default=None)
+            parser.add_argument(
+                option, choices=tuple(RADIO_OPTIONS[name][1]), default=None
+            )
         else:
             default = os.getenv(ENV_DEFAULTS[name]) if name in ENV_DEFAULTS else None
             parser.add_argument(option, default=default)
@@ -457,3 +514,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
