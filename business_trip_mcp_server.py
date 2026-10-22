@@ -3,6 +3,8 @@
 from fastmcp import FastMCP
 
 from business_trip import create_business_trip_application
+from travel_cost_report import create_travel_cost_report, prepare_travel_cost_report
+from trip_folder import list_trips
 
 TRAVEL_PLANNING_GUIDE = """\
 You are helping fill out a German business-trip application (Dienstreiseantrag).
@@ -102,17 +104,63 @@ must be reasonably AFTER `business_end_date` and `business_end_time`.
 - Leave fields unset (do not guess) when information is genuinely unknown; blank
   fields stay empty in the generated PDF for the applicant or office to fill in
   later.
+- Each call creates a new trip folder (`<DRA_TRIPS_DIR>/<date>_<destination>/`)
+  holding a private copy of the shared form templates, an empty `receipts/`
+  folder and the filled PDF. The tool returns `trip_folder` and
+  `application_pdf`; tell the user the trip folder, since the travel-cost report
+  is created from it later.
+- If `SIGNATURE_IMAGE` is configured, the PDF is signed with that image by
+  default (`sign=False` to skip). The signature field stays open for an
+  electronic signature.
 - When the application was created, provide a markdown link to the file, e.g.
   [<filename-and-path-to-pdf>](<filename-and-path-to-pdf>).
+"""
+
+TRAVEL_COST_REPORT_GUIDE = """\
+Fills the travel-cost report (Reisekostenabrechnung) of a trip folder created by
+`create_business_trip_application` and saves it in that folder.
+
+Workflow:
+1. Call `prepare_travel_cost_report(trip_folder)` (use `list_trips` to find the
+   folder). It returns the values from the trip's Dienstreiseantrag, the receipt
+   files in `<trip_folder>/receipts/`, and `open_questions`.
+2. Read the receipts/tickets/hotel invoice and extract what they state: costs per
+   leg, actual departure/return dates and times, means of transport, hotel name,
+   place, nights, amounts, meals included in the hotel rate, incidental costs.
+3. Ask the user ALL `open_questions` (and the applicable `follow_up_questions`)
+   in one message. Never guess these: free meals per day, actual business
+   start/end, personal season ticket, tickets from the travel-cost office, bonus
+   programs, free accommodation, private stay, private car, advance payment,
+   email consent. The tool refuses to run while any of them is missing.
+4. Call this tool with the answers plus the extracted values.
+
+Notes:
+- `trip_folder` is the path returned by the application tool, or its folder name.
+- Times are actual times, not the planned ones from the application.
+- Amounts in EUR as German-formatted text, e.g. "123,45". Do not invent costs;
+  leave a field unset when no receipt supports it.
+- `free_meals`: one entry per day with free meals (max 7), [] if none.
+- `incidental_costs`: max 2 per section (outbound/business/return); put the rest
+  and any other remarks in `other_notes`.
+- Hotel: use `accommodation_total_cost`/`accommodation_total_nights` (+
+  `accommodation_total_includes`) when the invoice only shows a total, otherwise
+  the separate `accommodation_cost`/`hotel_*_cost` fields.
+- Personal fields fall back to the application and then to `.env`.
+- Signs with `SIGNATURE_IMAGE` if configured (`sign=False` to skip).
+- Receipts must still be attached when submitting. Provide a markdown link to
+  the generated PDF.
 """
 
 mcp = FastMCP(
     name="Business Trip Application",
     instructions=(
         "Fills the applicant-editable fields of the German business-trip "
-        "application PDF (Dienstreiseantrag) and saves a completed PDF. "
-        "Call the `business_trip_travel_planning_guide` prompt first if you "
-        "need help deciding transport mode or travel dates/times."
+        "application PDF (Dienstreiseantrag) and the travel-cost report "
+        "(Reisekostenabrechnung) and saves the completed PDFs in a per-trip "
+        "folder. Call the `business_trip_travel_planning_guide` prompt first if "
+        "you need help deciding transport mode or travel dates/times. For the "
+        "travel-cost report, call `prepare_travel_cost_report` first and ask the "
+        "user its open questions."
     ),
 )
 
@@ -120,6 +168,28 @@ mcp.tool(
     create_business_trip_application,
     name="create_business_trip_application",
     description=TRAVEL_PLANNING_GUIDE,
+)
+
+mcp.tool(
+    prepare_travel_cost_report,
+    name="prepare_travel_cost_report",
+    description=(
+        "Step 1 of the travel-cost report: returns values known from the trip's "
+        "Dienstreiseantrag, the receipt files to read, and the questions the user "
+        "must answer before calling `create_travel_cost_report`."
+    ),
+)
+
+mcp.tool(
+    create_travel_cost_report,
+    name="create_travel_cost_report",
+    description=TRAVEL_COST_REPORT_GUIDE,
+)
+
+mcp.tool(
+    list_trips,
+    name="list_trips",
+    description="List the trip folders with their filled application, travel-cost report and number of receipts.",
 )
 
 

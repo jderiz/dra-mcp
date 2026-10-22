@@ -1,17 +1,31 @@
 import argparse
 import inspect
 import os
-from datetime import datetime
+import shutil
+import subprocess
+import sys
+from datetime import date, datetime
 from pathlib import Path
 from typing import Sequence
 
 from dotenv import load_dotenv
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader
 from pypdf.generic import NameObject
+
+from pdf_forms import fill_pdf_form, resolve_signature
+from trip_folder import (
+    APPLICATION_FORM,
+    APPLICATION_PREFIX,
+    assert_outside_templates,
+    create_trip_folder,
+    trip_form,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
+# Bundled fallback, used when DRA_TEMPLATE_DIR is not set.
 TEMPLATE_PDF = BASE_DIR / "00_application-form.pdf"
+SIGNATURE_FIELD = "Sig Dienstreisende:r"
 ENV_FILE = BASE_DIR / ".env"
 DEFAULT_OUTPUT = BASE_DIR / "business_trip_application_filled.pdf"
 
@@ -139,21 +153,45 @@ def format_date(value: str) -> str:
     raise ValueError("Dates must use YYYY-MM-DD or DD.MM.YYYY format.")
 
 
-def parse_datetime(date_value: str, time_value: str, label: str) -> datetime:
+def parse_date(value: str, label: str = "Date") -> date:
     for date_format in ("%Y-%m-%d", "%d.%m.%Y"):
         try:
-            parsed_date = datetime.strptime(date_value, date_format).date()
-            break
+            return datetime.strptime(value, date_format).date()
         except ValueError:
             continue
-    else:
-        raise ValueError(f"{label} date must use YYYY-MM-DD or DD.MM.YYYY format.")
+    raise ValueError(f"{label} must use YYYY-MM-DD or DD.MM.YYYY format.")
 
+
+def parse_datetime(date_value: str, time_value: str, label: str) -> datetime:
+    parsed_date = parse_date(date_value, f"{label} date")
     try:
         parsed_time = datetime.strptime(time_value, "%H:%M").time()
     except ValueError as error:
         raise ValueError(f"{label} time must use HH:MM format.") from error
     return datetime.combine(parsed_date, parsed_time)
+
+
+def check_trip_order(values: dict) -> None:
+    """Departure must precede the business start, return must follow the business end."""
+    trip_times = (
+        ("departure_date", "departure_time", "business_start_date", "business_start_time"),
+        ("business_end_date", "business_end_time", "return_date", "return_time"),
+    )
+    for earlier_date, earlier_time, later_date, later_time in trip_times:
+        if all(values.get(name) is not None for name in (earlier_date, earlier_time, later_date, later_time)):
+            earlier = parse_datetime(values[earlier_date], values[earlier_time], earlier_date.replace("_", " ").capitalize())
+            later = parse_datetime(values[later_date], values[later_time], later_date.replace("_", " ").capitalize())
+            if earlier >= later:
+                if earlier_date == "departure_date":
+                    raise ValueError("Departure date/time must be before business start date/time.")
+                raise ValueError("Return date/time must be after business end date/time.")
+
+
+def open_file(path: Path) -> None:
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif opener := shutil.which("open") or shutil.which("xdg-open"):
+        subprocess.run([opener, str(path)], check=False)
 
 
 def create_business_trip_application(
@@ -229,11 +267,30 @@ def create_business_trip_application(
     travel_end_at: str | None = None,
     bahncard_class: str | None = None,
     bahncard_rate: str | None = None,
-) -> Path:
-    """Fill applicant-editable fields in the business-trip application PDF."""
-    return create_business_trip_application_int(**locals())
+    sign: bool | None = None,
+) -> dict[str, str]:
+    """Fill the business-trip application in a new trip folder.
 
-def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, template_path: str | Path = TEMPLATE_PDF, 
+    Creates `<DRA_TRIPS_DIR>/<date>_<destination>/` with a private copy of the
+    shared templates and fills that copy; the shared templates are never written.
+    Returns the trip folder and the path of the filled PDF.
+    """
+    arguments = locals().copy()
+    trip_date = departure_date or business_start_date
+    folder = create_trip_folder(parse_date(trip_date) if trip_date else None, destination)
+    try:
+        result = create_business_trip_application_int(
+            output_path=folder / f"{APPLICATION_PREFIX}{folder.name}.pdf",
+            template_path=trip_form(folder, APPLICATION_FORM) or TEMPLATE_PDF,
+            **arguments,
+        )
+    except Exception:
+        shutil.rmtree(folder)
+        raise
+    return {"trip_folder": str(folder), "application_pdf": str(result)}
+
+def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, template_path: str | Path = TEMPLATE_PDF,
+                                         sign: bool | None = None,
                                          service_unit: str | None = None,
                                              applicant_name: str | None = None,
                                              department: str | None = None,
@@ -312,27 +369,19 @@ def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, templ
     values = locals().copy()
     values.pop("output_path")
     values.pop("template_path")
+    values.pop("sign")
     for argument, variable in ENV_DEFAULTS.items():
         if values[argument] is None:
             values[argument] = os.getenv(variable)
 
-    trip_times = (
-        ("departure_date", "departure_time", "business_start_date", "business_start_time"),
-        ("business_end_date", "business_end_time", "return_date", "return_time"),
-    )
-    for earlier_date, earlier_time, later_date, later_time in trip_times:
-        if all(values[name] is not None for name in (earlier_date, earlier_time, later_date, later_time)):
-            earlier = parse_datetime(values[earlier_date], values[earlier_time], earlier_date.replace("_", " ").capitalize())
-            later = parse_datetime(values[later_date], values[later_time], later_date.replace("_", " ").capitalize())
-            if earlier >= later:
-                if earlier_date == "departure_date":
-                    raise ValueError("Departure date/time must be before business start date/time.")
-                raise ValueError("Return date/time must be after business end date/time.")
+    check_trip_order(values)
+
+    signature_image = resolve_signature(sign)
+    if signature_image is not None and values["application_date"] is None:
+        values["application_date"] = date.today().isoformat()
 
     source = Path(template_path).expanduser().resolve()
-    destination = Path(output_path).expanduser().resolve()
-    if source == destination:
-        raise ValueError("The output PDF must not overwrite the template.")
+    assert_outside_templates(output_path)
 
     reader = PdfReader(source)
     field_definitions = reader.get_fields() or {}
@@ -359,36 +408,25 @@ def create_business_trip_application_int(output_path:str = DEFAULT_OUTPUT, templ
         states = [state for state in field_definitions[pdf_field]["/_States_"] if state != "/Off"]
         form_values[pdf_field] = NameObject(states[choices[selected] - 1])
 
-    writer = PdfWriter(clone_from=source)
-    for page in writer.pages:
-        writer.update_page_form_field_values(page, form_values, auto_regenerate=False)
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    requested_destination = destination
-    suffix = 0
-    while True:
-        try:
-            with destination.open("xb") as output_file:
-                writer.write(output_file)
-            break
-        except FileExistsError:
-            suffix += 1
-            destination = requested_destination.with_name(
-                f"{requested_destination.stem}-{suffix}{requested_destination.suffix}"
-            )
-    return destination
+    signature = (SIGNATURE_FIELD, signature_image) if signature_image is not None else None
+    return fill_pdf_form(source, output_path, form_values, signature)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Fill the applicant section of the business-trip PDF.")
     parser.add_argument("--template", type=Path, default=TEMPLATE_PDF, help="Path to the blank PDF form.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Path for the filled PDF.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Path for the filled PDF. Default: a new trip folder below DRA_TRIPS_DIR (then --template is ignored).",
+    )
 
     for name, parameter in inspect.signature(create_business_trip_application).parameters.items():
         if name in {"output_path", "template_path"}:
             continue
         option = "--" + name.replace("_", "-")
-        if name in CHECKBOX_FIELDS:
+        if name in CHECKBOX_FIELDS or name == "sign":
             parser.add_argument(option, action=argparse.BooleanOptionalAction, default=None)
         elif name in RADIO_OPTIONS:
             parser.add_argument(option, choices=tuple(RADIO_OPTIONS[name][1]), default=None)
@@ -404,13 +442,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = vars(parser.parse_args(argv))
     output_path = arguments.pop("output")
     template_path = arguments.pop("template")
-    result = create_business_trip_application_int(
-        output_path=output_path,
-        template_path=template_path,
-        **arguments,
-    )
+    if output_path is None:
+        result = Path(create_business_trip_application(**arguments)["application_pdf"])
+    else:
+        result = create_business_trip_application_int(
+            output_path=output_path,
+            template_path=template_path,
+            **arguments,
+        )
     print(f"Filled application written to {result}")
-    os.startfile(result)
+    open_file(result)
     return 0
 
 

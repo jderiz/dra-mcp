@@ -16,20 +16,46 @@ cd dra-mcp
 uv sync
 ```
 
-Put reusable applicant details in `.env`:
+Copy `.env.example` to `.env` and put reusable applicant details there:
 ```
 SERVICE_UNIT=
 APPLICANT_NAME=
+PERSONALNUMMER=
 DEPARTMENT=
 OFFICE_PHONE=
+EMAIL=
 HOME_ADDRESS=
 ADDITIONAL_HOME_ADDRESS=
 TEMPORARY_STAY_ADDRESS=
 IBAN=
 BIC=
 BANK_NAME=
+DRA_TEMPLATE_DIR=
+DRA_TRIPS_DIR=
+SIGNATURE_IMAGE=
 ```
 This file is ignored by Git because it may contain personal and banking information.
+
+- `DRA_TEMPLATE_DIR`: folder with the blank forms, e.g. the shared Nextcloud folder
+  with `01_Application/01_application-form.pdf` and
+  `02_Accounting/02_travel-cost-report.pdf`. It is only read, never written: filling
+  forms inside a shared folder would leak your data through its version history.
+  Without it, the bundled `00_application-form.pdf` is used and the travel-cost
+  report is unavailable.
+- `DRA_TRIPS_DIR`: where trip folders are created (default `~/Documents/Dienstreisen`).
+  It must not lie inside `DRA_TEMPLATE_DIR`.
+- `SIGNATURE_IMAGE`: optional PNG/JPG of your signature. It is stamped into the
+  applicant signature box of both forms (pass `sign=False` to skip). The PDF
+  signature field stays empty, so you can still add an electronic signature.
+
+Each new Dienstreiseantrag creates a trip folder:
+```
+<DRA_TRIPS_DIR>/2026-11-03_01069-Dresden/
+├── templates/                     # private copy of the whole template tree
+├── receipts/                      # put tickets, hotel invoice, other receipts here
+├── Dienstreiseantrag_2026-11-03_01069-Dresden.pdf
+└── Reisekostenabrechnung_2026-11-03_01069-Dresden.pdf   # after the trip
+```
 
 If you use this tool via an MCP-compatible AI-agent such as [Jan.AI](https://github.com/janhq/jan) (open source), it is recommended to use privacy-preserving, local-only Large Language Models. If you use a cloud-service for this, be aware that information such as your home adress and bank account might be shared with this cloud service provider!
 
@@ -41,6 +67,20 @@ out and generate the PDF for you. It also ships a
 `business_trip_travel_planning_guide` prompt with detailed rules for choosing the
 transport mode (train vs. flight) and estimating realistic departure/return
 dates and times, assuming the traveller starts from Leipzig.
+
+For the travel-cost report (Reisekostenabrechnung) after the trip:
+
+- `prepare_travel_cost_report(trip_folder)` returns the values from the trip's
+  Dienstreiseantrag, the files in `receipts/`, and the questions no receipt can
+  answer (free meals per day, actual business start/end, season tickets, bonus
+  programs, free accommodation, private stay, private car, advance, email consent).
+- `create_travel_cost_report(trip_folder, ...)` fills the trip's copy of the report.
+  It refuses to run until all of those questions are answered.
+- `list_trips()` lists the trip folders.
+
+Without an agent, `python travel_cost_report.py <trip_folder>` prints the same
+overview and `python travel_cost_report.py <trip_folder> answers.json` fills the
+report from a JSON file with the tool's arguments.
 
 Install dependencies and run the server with [uv](https://docs.astral.sh/uv/):
 
